@@ -1,0 +1,67 @@
+name: DNG build provider-gcp-storage
+
+on:
+  push:
+    branches: ["dng/**"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag, e.g. v3.1.0-dng.2 (dng-apps tags are immutable)"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  IMAGE: us-central1-docker.pkg.dev/dng-production/dng-apps/provider-gcp-storage
+  WORKLOAD_IDENTITY_PROVIDER: projects/289216582650/locations/global/workloadIdentityPools/github-provider-builds/providers/github
+  SERVICE_ACCOUNT: gh-provider-builds@dng-production.iam.gserviceaccount.com
+
+jobs:
+  storage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Version
+        id: version
+        run: |
+          VERSION="${{ inputs.version }}"
+          echo "version=${VERSION:-0.0.0-${GITHUB_SHA::12}}" >> "$GITHUB_OUTPUT"
+
+      - name: Build provider
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags "-s -w -X github.com/upbound/provider-gcp/v3/internal/version.Version=${{ steps.version.outputs.version }}" \
+            -o dng/provider ./cmd/provider/storage
+
+      - name: Build image
+        run: |
+          docker build --platform linux/amd64 -f dng/Dockerfile.storage \
+            --label org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }} \
+            --label org.opencontainers.image.revision=${{ github.sha }} \
+            --label org.opencontainers.image.version=${{ steps.version.outputs.version }} \
+            -t "$IMAGE:${{ steps.version.outputs.version }}" dng
+          docker run --rm --entrypoint provider "$IMAGE:${{ steps.version.outputs.version }}" --help > /dev/null
+
+      - if: github.event_name == 'workflow_dispatch'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - if: github.event_name == 'workflow_dispatch'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Push image
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          docker push "$IMAGE:${{ steps.version.outputs.version }}"
+          DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:${{ steps.version.outputs.version }}")
+          echo "Pushed \`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"

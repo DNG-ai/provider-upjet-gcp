@@ -1,0 +1,6 @@
+# Official provider-gcp-storage v3.1.0 runtime (linux/amd64), with the provider
+# binary built from this branch. Only the runtime is replaced: Crossplane still
+# installs the upstream package for the CRDs.
+FROM xpkg.crossplane.io/crossplane-contrib/provider-gcp-storage:v3.1.0@sha256:8b5908cd1b9732947e1992a3d5de740593eeb30718fbceca5feb91d0dfb2711a
+
+COPY provider /usr/local/bin/provider
